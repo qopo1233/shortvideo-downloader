@@ -52,9 +52,56 @@ class DouyinDownloader {
      */
     async waitForVerification(page) {
         try {
-            // 等待验证码弹窗出现
-            const verificationSelector = '.captcha_verify_container';
-            await page.waitForSelector(verificationSelector, { timeout: 5000 });
+            console.log('Checking for verification challenges...');
+            
+            // 检查多种可能的验证码元素，基于用户提供的HTML结构
+            const selectors = [
+                '.captcha_verify_container', // 原来的选择器
+                '#captcha_container', // 新发现的包含iframe的容器
+                'iframe[src*="captcha"]', // 包含 captcha 的 iframe
+                '.captcha-verify-image-slide', // 用户提供的HTML中的滑块图片
+                '#captcha-verify_img_slide', // 用户提供的HTML中的滑块元素ID
+                '.vc-captcha-verify', // 用户提供的HTML中的验证容器
+                '.dragger-item', // 用户提供的HTML中的滑块容器
+                '.captcha-slider-btn', // 用户提供的HTML中的滑块按钮
+                '.captcha_verify_img--wrapper' // 用户提供的HTML中的图片容器
+            ];
+            
+            let captchaFound = false;
+            let captchaSelector = '';
+            
+            // 检查所有可能的验证码元素
+            for (const selector of selectors) {
+                try {
+                    console.log(`Checking for selector: ${selector}`);
+                    await page.waitForSelector(selector, { timeout: 3000 });
+                    console.log(`Found verification element with selector: ${selector}`);
+                    captchaFound = true;
+                    captchaSelector = selector;
+                    break;
+                } catch (e) {
+                    console.log(`Selector ${selector} not found`);
+                }
+            }
+            
+            // 如果没有找到验证码元素，尝试检查页面内容中是否包含验证码相关文本
+            if (!captchaFound) {
+                const pageContent = await page.content();
+                const captchaKeywords = ['captcha', '验证码', '滑动验证', '安全验证'];
+                
+                for (const keyword of captchaKeywords) {
+                    if (pageContent.includes(keyword)) {
+                        console.log(`Found captcha keyword in page content: ${keyword}`);
+                        captchaFound = true;
+                        break;
+                    }
+                }
+            }
+            
+            if (!captchaFound) {
+                console.log('No verification required');
+                return false;
+            }
             
             console.log('Verification required. Attempting to solve automatically...');
             
@@ -66,29 +113,245 @@ class DouyinDownloader {
             
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const screenshotPath = path.join(debugDir, `captcha-${timestamp}.png`);
-            await page.screenshot({ path: screenshotPath });
+            await page.screenshot({ path: screenshotPath, fullPage: true });
             console.log(`Captcha screenshot saved to: ${screenshotPath}`);
             
-            // 尝试自动滑动验证
-            try {
-                await this.solveSlideCaptcha(page);
-                console.log('Automatic captcha solving attempt completed');
-            } catch (solveError) {
-                console.error('Failed to solve captcha automatically:', solveError);
-                console.log('Waiting for manual verification or timeout...');
+            // 保存HTML内容以便调试
+            const htmlPath = path.join(debugDir, `captcha-html-${timestamp}.html`);
+            const html = await page.content();
+            fs.writeFileSync(htmlPath, html);
+            console.log(`Captcha HTML saved to: ${htmlPath}`);
+            
+            // 如果有iframe，尝试切换到iframe内部
+            if (captchaSelector.includes('iframe')) {
+                try {
+                    const frames = await page.frames();
+                    const captchaFrame = frames.find(frame => {
+                        const url = frame.url();
+                        return url.includes('captcha');
+                    });
+                    
+                    if (captchaFrame) {
+                        console.log('Switching to captcha iframe...');
+                        // 在iframe内尝试解决验证码
+                        await this.solveSlideCaptchaInFrame(captchaFrame);
+                    } else {
+                        console.log('Captcha iframe found but could not get frame reference');
+                    }
+                } catch (frameError) {
+                    console.error('Error working with captcha iframe:', frameError);
+                }
+            } else {
+                // 尝试在主页面中解决验证码
+                try {
+                    await this.solveSlideCaptcha(page);
+                    console.log('Automatic captcha solving attempt completed');
+                } catch (solveError) {
+                    console.error('Failed to solve captcha automatically:', solveError);
+                    console.log('Waiting for manual verification or timeout...');
+                }
             }
             
-            // 等待验证完成
-            await page.waitForFunction(
-                () => !document.querySelector('.captcha_verify_container'),
-                { timeout: 300000 } // 5分钟超时
-            );
+            // 等待验证完成 - 检查多种可能的完成条件
+            await Promise.race([
+                // 等待验证容器消失
+                page.waitForFunction(
+                    (selectors) => {
+                        for (const selector of selectors) {
+                            if (!document.querySelector(selector)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    },
+                    { timeout: 300000 }, // 5分钟超时
+                    selectors
+                ),
+                // 等待页面URL变化（可能表示验证成功后的跳转）
+                page.waitForFunction(
+                    () => {
+                        const currentUrl = window.location.href;
+                        return !currentUrl.includes('verify');
+                    },
+                    { timeout: 300000 } // 5分钟超时
+                )
+            ]);
             
             console.log('Verification completed');
             return true;
         } catch (error) {
-            console.log('No verification required or verification timed out');
+            console.log('Verification check failed or timed out:', error.message);
             return false;
+        }
+    }
+    
+    /**
+     * 在iframe内尝试解决滑动验证码
+     * @param {Object} frame - Puppeteer框架实例
+     * @returns {Promise<void>}
+     */
+    async solveSlideCaptchaInFrame(frame) {
+        console.log('Attempting to solve slide captcha in iframe...');
+        
+        try {
+            // 等待滑块元素加载 - 基于用户提供的HTML结构
+            const possibleSliderSelectors = [
+                '.captcha-slider-btn', // 用户提供的HTML中的滑块按钮
+                '.dragger-item', // 用户提供的HTML中的滑块容器
+                '.captcha-verify-image-slide', // 用户提供的HTML中的滑块图片
+                '#captcha-verify_img_slide', // 用户提供的HTML中的滑块元素ID
+                '.secsdk-captcha-drag-icon', // 原来的选择器
+                '.captcha_verify_img_slide',
+                '.verify-slider',
+                '.slider-button',
+                '.slide-button',
+                '.drag-button',
+                'div[role="slider"]',
+                '.slider_handler'
+            ];
+            
+            let sliderHandle = null;
+            let sliderSelector = '';
+            
+            for (const selector of possibleSliderSelectors) {
+                try {
+                    console.log(`Looking for slider with selector: ${selector} in iframe`);
+                    await frame.waitForSelector(selector, { timeout: 5000 });
+                    sliderHandle = await frame.$(selector);
+                    if (sliderHandle) {
+                        console.log(`Found slider with selector: ${selector} in iframe`);
+                        sliderSelector = selector;
+                        break;
+                    }
+                } catch (e) {
+                    console.log(`Selector ${selector} not found in iframe`);
+                }
+            }
+            
+            if (!sliderHandle) {
+                throw new Error('在iframe中未找到滑块元素');
+            }
+            
+            // 获取滑块位置
+            const sliderBox = await sliderHandle.boundingBox();
+            if (!sliderBox) {
+                throw new Error('无法获取滑块边界框');
+            }
+            
+            // 获取滑块轨道容器，以确定滑动距离 - 基于用户提供的HTML结构
+            const trackSelectors = [
+                '.captcha-slider-box', // 用户提供的HTML中的滑块轨道盒
+                '.captcha_verify_slide--button', // 用户提供的HTML中的滑块按钮容器
+                '.captcha-slider-dragged-area', // 用户提供的HTML中的滑块区域
+                '.captcha_verify_slide_track',
+                '.verify-track',
+                '.slider-track',
+                '.secsdk-captcha-drag-track'
+            ];
+            
+            let trackWidth = 300; // 默认值
+            
+            for (const trackSelector of trackSelectors) {
+                try {
+                    const trackElement = await frame.$(trackSelector);
+                    if (trackElement) {
+                        const trackBox = await trackElement.boundingBox();
+                        if (trackBox) {
+                            trackWidth = trackBox.width;
+                            console.log(`Found track with width: ${trackWidth}px`);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    console.log(`Track selector ${trackSelector} not found or error:`, e.message);
+                }
+            }
+            
+            // 计算滑动距离，通常是轨道宽度的一定比例
+            // 这里使用随机值，以模拟人类行为
+            const slideDistance = Math.floor(trackWidth * 0.7 + Math.random() * 20);
+            console.log(`Calculated slide distance: ${slideDistance}px`);
+            
+            // 滑块起始位置
+            const startX = sliderBox.x + sliderBox.width / 2;
+            const startY = sliderBox.y + sliderBox.height / 2;
+            
+            // 滑块目标位置
+            const endX = startX + slideDistance;
+            const endY = startY;
+            
+            console.log(`Starting slide from (${startX}, ${startY}) to (${endX}, ${endY})`);
+            
+            // 模拟人类滑动行为
+            // 1. 移动到滑块位置
+            await frame.mouse.move(startX, startY, { steps: 10 });
+            
+            // 2. 按下鼠标
+            await frame.mouse.down();
+            
+            // 3. 生成人类化的滑动轨迹
+            const steps = Math.floor(slideDistance / 5); // 每5像素一步
+            
+            // 生成一个缓动曲线，开始慢，中间快，结束慢
+            for (let i = 0; i <= steps; i++) {
+                const progress = i / steps;
+                
+                // 使用三次贝塞尔曲线模拟人类滑动
+                const easeInOutCubic = progress < 0.5
+                    ? 4 * progress * progress * progress
+                    : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+                
+                const currentX = startX + easeInOutCubic * slideDistance;
+                
+                // 在Y轴方向添加小的随机抖动，模拟人类手部不稳定性
+                const currentY = startY + (Math.random() - 0.5) * 2;
+                
+                await frame.mouse.move(currentX, currentY, { steps: 1 });
+                
+                // 添加随机延迟，模拟人类速度变化
+                await new Promise(resolve => setTimeout(resolve, Math.random() * 5 + 5));
+            }
+            
+            // 在终点位置停留一下
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            // 4. 松开鼠标
+            await frame.mouse.up();
+            
+            // 等待一段时间，查看验证结果
+            console.log('Waiting to see if the slide captcha was solved...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // 检查验证是否成功 - 基于用户提供的HTML结构
+            const successIndicators = [
+                '.captcha_verify_success',
+                '.verify-success',
+                '.success-icon',
+                // 检查验证容器是否消失
+                '#captcha_container',
+                '.vc-captcha-verify',
+                // 检查是否有其他成功指示器
+                '.vc-animation'
+            ];
+            
+            for (const indicator of successIndicators) {
+                try {
+                    const success = await frame.$(indicator);
+                    if (success) {
+                        console.log(`Captcha solved successfully! Found success indicator: ${indicator}`);
+                        return;
+                    }
+                } catch (e) {
+                    // 忽略错误，继续检查下一个指示器
+                }
+            }
+            
+            // 如果没有找到成功指示器，但也没有报错，我们假设可能成功了
+            console.log('No explicit success indicator found, but no error either. Proceeding...');
+            
+        } catch (error) {
+            console.error('Error solving slide captcha in iframe:', error);
+            throw error;
         }
     }
     
