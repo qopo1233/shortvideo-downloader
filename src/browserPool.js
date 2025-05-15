@@ -106,7 +106,8 @@ class BrowserPool {
                 '--window-size=1280,900',
                 '--start-maximized',
                 '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-gpu'
             ],
             ignoreDefaultArgs: [
                 '--enable-automation',

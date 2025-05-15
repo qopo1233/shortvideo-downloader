@@ -86,6 +86,25 @@ class DouyinDownloader {
             browserInstance = await this.browserPool.getBrowser();
             const page = browserInstance.page;
             
+            // 添加控制台监控
+            page.on('console', msg => {
+                const type = msg.type();
+                const text = msg.text();
+                console.log(`[Browser Console][${type}] ${text}`);
+            });
+            
+            page.on('pageerror', error => {
+                console.error('[Browser PageError]', error.message);
+            });
+            
+            page.on('requestfailed', request => {
+                console.error('[Browser RequestFailed]', 
+                    `URL: ${request.url()}, ` +
+                    `Method: ${request.method()}, ` +
+                    `Reason: ${request.failure()?.errorText || 'Unknown'}, ` +
+                    `ResourceType: ${request.resourceType()}`);
+            });
+            
             console.log(`Using browser instance ID: ${browserInstance.id}`);
             console.log('Navigating to video page...');
             
@@ -126,65 +145,184 @@ class DouyinDownloader {
             try {
                 await page.waitForSelector('.xg-video-container', { timeout: 10000 });
                 console.log('Video container loaded');
-            }catch(error) {
+            } catch(error) {
                 console.error('Failed to load video container:', error);
                 console.log('Attempting to proceed without video container...');
+                
+                // 保存截图和HTML以便调试
+                try {
+                    // 创建调试目录
+                    const debugDir = path.join(__dirname, '../debug');
+                    if (!fs.existsSync(debugDir)) {
+                        fs.mkdirSync(debugDir, { recursive: true });
+                    }
+                    
+                    // 生成时间戳文件名
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const screenshotPath = path.join(debugDir, `error-${timestamp}.png`);
+                    const htmlPath = path.join(debugDir, `error-${timestamp}.html`);
+                    
+                    // 保存截图
+                    await page.screenshot({ path: screenshotPath, fullPage: true });
+                    console.log(`Screenshot saved to: ${screenshotPath}`);
+                    
+                    // 保存页面HTML
+                    const html = await page.content();
+                    fs.writeFileSync(htmlPath, html);
+                    console.log(`HTML saved to: ${htmlPath}`);
+                } catch (debugError) {
+                    console.error('Error saving debug info:', debugError);
+                }
             }
 
             
 
             // 获取视频ID
-            const videoId = await page.evaluate(() => {
-                const url = window.location.href;
-                const match = url.match(/video\/(\d+)/);
-                return match ? match[1] : null;
-            });
-
-            if (!videoId) {
-                throw new Error('无法获取视频ID');
+            let videoId;
+            try {
+                videoId = await page.evaluate(() => {
+                    const url = window.location.href;
+                    console.log('Current URL for ID extraction:', url);
+                    const match = url.match(/video\/(\d+)/);
+                    if (!match) {
+                        console.error('No video ID found in URL');
+                        return null;
+                    }
+                    return match[1];
+                });
+                
+                if (!videoId) {
+                    // 尝试其他方法获取视频ID
+                    console.log('Trying alternative method to get video ID...');
+                    
+                    // 保存当前页面截图和HTML
+                    const debugDir = path.join(__dirname, '../debug');
+                    if (!fs.existsSync(debugDir)) {
+                        fs.mkdirSync(debugDir, { recursive: true });
+                    }
+                    
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const screenshotPath = path.join(debugDir, `no-id-${timestamp}.png`);
+                    const htmlPath = path.join(debugDir, `no-id-${timestamp}.html`);
+                    
+                    await page.screenshot({ path: screenshotPath, fullPage: true });
+                    console.log(`Screenshot saved to: ${screenshotPath}`);
+                    
+                    const html = await page.content();
+                    fs.writeFileSync(htmlPath, html);
+                    console.log(`HTML saved to: ${htmlPath}`);
+                    
+                    throw new Error('无法获取视频ID');
+                }
+            } catch (error) {
+                console.error('Error getting video ID:', error);
+                throw error;
             }
 
             console.log('Video ID:', videoId);
 
             // 获取视频信息
             console.log('Fetching video information...');
-            const videoInfo = await page.evaluate(async (aweme_id) => {
-                try {
-                    console.log('Making API request...');
-                    const response = await fetch(
-                        `https://www.douyin.com/aweme/v1/web/aweme/detail?aid=6383&version_code=190500&aweme_id=${aweme_id}`,
-                        {
-                            method: 'GET',
-                            headers: {
-                                'Referer': 'https://www.douyin.com'
+            let videoInfo;
+            try {
+                videoInfo = await page.evaluate(async (aweme_id) => {
+                    try {
+                        console.log('Making API request...');
+                        // 打印当前页面的cookie信息
+                        console.log('Document cookies:', document.cookie);
+                        
+                        const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail?aid=6383&version_code=190500&aweme_id=${aweme_id}`;
+                        console.log('API URL:', apiUrl);
+                        
+                        const response = await fetch(
+                            apiUrl,
+                            {
+                                method: 'GET',
+                                headers: {
+                                    'Referer': 'https://www.douyin.com',
+                                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                }
                             }
+                        );
+                        console.log('API response status:', response.status);
+                        
+                        if (!response.ok) {
+                            console.error('API response not OK:', response.status, response.statusText);
+                            const responseText = await response.text();
+                            console.log('Response text:', responseText);
+                            throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
                         }
-                    );
-                    console.log('API response status:', response.status);
-                    const data = await response.json();
-                    console.log('API response data:', data);
-                    
-                    if (data.status_code !== 0) {
-                        throw new Error('获取视频信息失败');
+                        
+                        const data = await response.json();
+                        console.log('API response data available');
+                        
+                        if (data.status_code !== 0) {
+                            console.error('API error status code:', data.status_code, data.status_msg);
+                            throw new Error(`获取视频信息失败: ${data.status_msg || '未知错误'}`);
+                        }
+                        
+                        if (!data.aweme_detail) {
+                            console.error('No aweme_detail in response:', data);
+                            throw new Error('响应中缺少aweme_detail数据');
+                        }
+                        
+                        const aweme_detail = data.aweme_detail;
+                        
+                        if (!aweme_detail.video) {
+                            console.error('No video data in aweme_detail:', aweme_detail);
+                            throw new Error('响应中缺少video数据');
+                        }
+                        
+                        const video = aweme_detail.video;
+                        
+                        if (!video.play_addr || !video.play_addr.url_list || video.play_addr.url_list.length === 0) {
+                            console.error('No play_addr or url_list in video data:', video);
+                            throw new Error('响应中缺少视频URL');
+                        }
+                        
+                        const play_addr = video.play_addr;
+                        const cover = video.dynamic_cover || video.origin_cover || {};
+                        let video_url = play_addr.url_list[0];
+                        
+                        return {
+                            title: aweme_detail.desc || '未命名视频',
+                            videoUrl: video_url,
+                            duration: video.duration,
+                            author: aweme_detail.author ? aweme_detail.author.nickname : '未知作者',
+                            coverUrl: cover.url_list ? cover.url_list[0] : null,
+                            dataSize: play_addr.data_size
+                        };
+                    } catch (error) {
+                        console.error('Error in page evaluation:', error);
+                        throw error;
                     }
-                    const aweme_detail = data.aweme_detail;
-                    const video = aweme_detail.video;
-                    const play_addr = video.play_addr;
-                    const cover = video.dynamic_cover;
-                    let video_url = play_addr.url_list[0];
-                    return {
-                        title: aweme_detail.desc || '未命名视频',
-                        videoUrl: video_url,
-                        duration: video.duration,
-                        author: aweme_detail.author.nickname,
-                        coverUrl: cover.url_list[0],
-                        dataSize: play_addr.data_size
-                    };
-                } catch (error) {
-                    console.error('Error in page evaluation:', error);
-                    throw error;
+                }, videoId);
+            } catch (error) {
+                console.error('Error evaluating in page context:', error);
+                
+                // 保存页面状态以便调试
+                try {
+                    const debugDir = path.join(__dirname, '../debug');
+                    if (!fs.existsSync(debugDir)) {
+                        fs.mkdirSync(debugDir, { recursive: true });
+                    }
+                    
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const screenshotPath = path.join(debugDir, `api-error-${timestamp}.png`);
+                    const htmlPath = path.join(debugDir, `api-error-${timestamp}.html`);
+                    
+                    await page.screenshot({ path: screenshotPath, fullPage: true });
+                    console.log(`Error screenshot saved to: ${screenshotPath}`);
+                    
+                    const html = await page.content();
+                    fs.writeFileSync(htmlPath, html);
+                    console.log(`Error HTML saved to: ${htmlPath}`);
+                } catch (debugError) {
+                    console.error('Error saving debug info:', debugError);
                 }
-            }, videoId);
+                
+                throw error;
+            }
 
             if (!videoInfo.videoUrl) {
                 throw new Error('无法获取视频URL');
