@@ -113,6 +113,12 @@ class DouyinDownloader {
                 console.log('No login panel found');
             }
 
+            // 打印页面信息
+            console.log('Printing page content for debugging...');
+            const pageContent = await page.evaluate(() => document.body.innerText);
+            console.log('Page content:', pageContent);
+            
+            console.log
             // 等待视频容器加载
             await page.waitForSelector('.xg-video-container', { timeout: 5000 });
             console.log('Video container loaded');
