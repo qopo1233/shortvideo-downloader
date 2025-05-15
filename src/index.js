@@ -56,7 +56,27 @@ class DouyinDownloader {
             const verificationSelector = '.captcha_verify_container';
             await page.waitForSelector(verificationSelector, { timeout: 5000 });
             
-            console.log('Verification required. Please complete the verification manually.');
+            console.log('Verification required. Attempting to solve automatically...');
+            
+            // 保存验证码截图以便调试
+            const debugDir = path.join(__dirname, '../debug');
+            if (!fs.existsSync(debugDir)) {
+                fs.mkdirSync(debugDir, { recursive: true });
+            }
+            
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const screenshotPath = path.join(debugDir, `captcha-${timestamp}.png`);
+            await page.screenshot({ path: screenshotPath });
+            console.log(`Captcha screenshot saved to: ${screenshotPath}`);
+            
+            // 尝试自动滑动验证
+            try {
+                await this.solveSlideCaptcha(page);
+                console.log('Automatic captcha solving attempt completed');
+            } catch (solveError) {
+                console.error('Failed to solve captcha automatically:', solveError);
+                console.log('Waiting for manual verification or timeout...');
+            }
             
             // 等待验证完成
             await page.waitForFunction(
@@ -69,6 +89,127 @@ class DouyinDownloader {
         } catch (error) {
             console.log('No verification required or verification timed out');
             return false;
+        }
+    }
+    
+    /**
+     * 尝试自动解决滑动验证码
+     * @param {Object} page - Puppeteer页面实例
+     * @returns {Promise<void>}
+     */
+    async solveSlideCaptcha(page) {
+        // 等待滑块元素加载
+        const sliderSelector = '.secsdk-captcha-drag-icon';
+        await page.waitForSelector(sliderSelector, { timeout: 5000 });
+        
+        // 获取滑块元素
+        const sliderHandle = await page.$(sliderSelector);
+        if (!sliderHandle) {
+            throw new Error('未找到滑块元素');
+        }
+        
+        // 获取滑块位置
+        const sliderBox = await sliderHandle.boundingBox();
+        
+        // 获取滑动轨道元素
+        const trackSelector = '.captcha_verify_slide_bar';
+        const trackElement = await page.$(trackSelector);
+        if (!trackElement) {
+            throw new Error('未找到滑动轨道元素');
+        }
+        
+        // 获取轨道宽度
+        const trackBox = await trackElement.boundingBox();
+        
+        // 计算最大滑动距离
+        const maxSlideDistance = trackBox.width - sliderBox.width;
+        
+        // 滑动起始点（滑块中心）
+        const startX = sliderBox.x + sliderBox.width / 2;
+        const startY = sliderBox.y + sliderBox.height / 2;
+        
+        // 模拟人类滑动轨迹
+        await page.mouse.move(startX, startY);
+        await page.mouse.down();
+        
+        // 生成人类化的滑动轨迹
+        const steps = 30; // 滑动步数
+        const baseDistance = maxSlideDistance * 0.8; // 估计的滑动距离，稍微小于最大距离
+        
+        // 模拟人类滑动特征：开始快，中间慢，结束快
+        for (let i = 0; i < steps; i++) {
+            const progress = i / steps;
+            
+            // 使用三次贝塞尔曲线模拟人类动作
+            // 这会创建一个先快后慢再快的运动模式
+            const easeInOutCubic = progress < 0.5 
+                ? 4 * progress * progress * progress 
+                : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+            
+            // 添加小幅度的随机性，模拟手部抖动
+            const randomOffset = (Math.random() - 0.5) * 2;
+            
+            const currentDistance = baseDistance * easeInOutCubic;
+            const currentX = startX + currentDistance + randomOffset;
+            
+            // 在Y方向上也添加小幅度的随机性
+            const currentY = startY + (Math.random() - 0.5) * 3;
+            
+            await page.mouse.move(currentX, currentY);
+            
+            // 添加随机延迟，模拟人类速度变化
+            await new Promise(resolve => setTimeout(resolve, 10 + Math.random() * 20));
+        }
+        
+        // 最后的微调滑动，尝试几次小幅度调整
+        for (let i = 0; i < 3; i++) {
+            const finalAdjustment = (Math.random() - 0.5) * 10;
+            await page.mouse.move(startX + baseDistance + finalAdjustment, startY + (Math.random() - 0.5) * 2);
+            await new Promise(resolve => setTimeout(resolve, 50 + Math.random() * 100));
+        }
+        
+        // 松开鼠标
+        await page.mouse.up();
+        
+        // 等待一段时间，查看验证结果
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // 检查验证是否成功
+        const isSuccess = await page.evaluate(() => {
+            return !document.querySelector('.captcha_verify_container');
+        });
+        
+        if (!isSuccess) {
+            // 如果验证失败，再尝试一次不同的距离
+            console.log('First captcha solving attempt failed, trying with different distance...');
+            
+            // 重新获取滑块元素（可能已经刷新）
+            const newSliderHandle = await page.$(sliderSelector);
+            if (!newSliderHandle) {
+                throw new Error('重试时未找到滑块元素');
+            }
+            
+            const newSliderBox = await newSliderHandle.boundingBox();
+            const newStartX = newSliderBox.x + newSliderBox.width / 2;
+            const newStartY = newSliderBox.y + newSliderBox.height / 2;
+            
+            // 使用不同的距离再尝试一次
+            const newBaseDistance = maxSlideDistance * 0.9; // 尝试更长的距离
+            
+            await page.mouse.move(newStartX, newStartY);
+            await page.mouse.down();
+            
+            // 简化的第二次尝试
+            for (let i = 0; i < steps; i++) {
+                const progress = i / steps;
+                const easeInOutQuad = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+                
+                const currentDistance = newBaseDistance * easeInOutQuad;
+                await page.mouse.move(newStartX + currentDistance, newStartY + (Math.random() - 0.5) * 2);
+                await new Promise(resolve => setTimeout(resolve, 10 + Math.random() * 10));
+            }
+            
+            await page.mouse.up();
         }
     }
 
@@ -112,6 +253,12 @@ class DouyinDownloader {
                 waitUntil: 'domcontentloaded',
                 timeout: 30000
             });
+            
+            // 检查并处理验证码
+            const needVerification = await this.waitForVerification(page);
+            if (needVerification) {
+                console.log('Verification was needed and completed successfully');
+            }
 
             // 检查并处理登录弹窗
             try {
