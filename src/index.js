@@ -249,10 +249,19 @@ class DouyinDownloader {
             console.log(`Using browser instance ID: ${browserInstance.id}`);
             console.log('Navigating to video page...');
             
-            await page.goto(videoUrl, {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000
-            });
+            // 使用更长的超时时间和更完整的等待策略
+            try {
+                await page.goto(videoUrl, {
+                    waitUntil: 'networkidle2', // 等待网络基本空闲
+                    timeout: 60000 // 60秒超时
+                });
+            } catch (navigationError) {
+                console.error('Navigation error:', navigationError);
+                console.log('Attempting to continue despite navigation error...');
+                
+                // 尝试等待一些时间让页面加载
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
             
             // 检查并处理验证码
             const needVerification = await this.waitForVerification(page);
@@ -281,20 +290,48 @@ class DouyinDownloader {
 
             // 打印页面信息
             console.log('Printing page content for debugging...');
-            const pageContent = await page.evaluate(() => document.body.innerText);
-            console.log('Page content:', pageContent);
+            try {
+                const pageContent = await page.evaluate(() => document.body.innerText);
+                console.log('Page content length:', pageContent.length);
+                // 只打印前200个字符，避免日志过大
+                console.log('Page content preview:', pageContent.substring(0, 200) + '...');
+            } catch (error) {
+                console.error('Error getting page content:', error);
+            }
             
             // 获取当前页面的url
             const currentUrl = await page.url();
             console.log('Current page URL:', currentUrl);
 
-            // 等待视频容器加载
-            try {
-                await page.waitForSelector('.xg-video-container', { timeout: 10000 });
-                console.log('Video container loaded');
-            } catch(error) {
-                console.error('Failed to load video container:', error);
-                console.log('Attempting to proceed without video container...');
+            // 等待视频容器加载 - 尝试多个可能的选择器
+            let videoContainerFound = false;
+            const possibleSelectors = [
+                '.xg-video-container',
+                '.video-container',
+                '.swiper-container',
+                '.player-container',
+                '.video-player',
+                'video',
+                '.xgplayer',
+                '.xg-player',
+                '.swiper-slide-active'
+            ];
+            
+            for (const selector of possibleSelectors) {
+                try {
+                    console.log(`Trying to find selector: ${selector}`);
+                    // 使用更长的超时时间
+                    await page.waitForSelector(selector, { timeout: 15000 });
+                    console.log(`Found video container with selector: ${selector}`);
+                    videoContainerFound = true;
+                    break;
+                } catch (error) {
+                    console.log(`Selector ${selector} not found`);
+                }
+            }
+            
+            if (!videoContainerFound) {
+                console.log('No video container found with any known selector, proceeding anyway...');
                 
                 // 保存截图和HTML以便调试
                 try {
@@ -306,8 +343,8 @@ class DouyinDownloader {
                     
                     // 生成时间戳文件名
                     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                    const screenshotPath = path.join(debugDir, `error-${timestamp}.png`);
-                    const htmlPath = path.join(debugDir, `error-${timestamp}.html`);
+                    const screenshotPath = path.join(debugDir, `no-container-${timestamp}.png`);
+                    const htmlPath = path.join(debugDir, `no-container-${timestamp}.html`);
                     
                     // 保存截图
                     await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -320,6 +357,10 @@ class DouyinDownloader {
                 } catch (debugError) {
                     console.error('Error saving debug info:', debugError);
                 }
+                
+                // 等待额外时间让页面加载
+                console.log('Waiting additional time for page to load...');
+                await new Promise(resolve => setTimeout(resolve, 10000));
             }
 
             
@@ -372,26 +413,50 @@ class DouyinDownloader {
             console.log('Fetching video information...');
             let videoInfo;
             try {
+                // 使用设置更长超时的方式调用页面函数
                 videoInfo = await page.evaluate(async (aweme_id) => {
                     try {
                         console.log('Making API request...');
                         // 打印当前页面的cookie信息
-                        console.log('Document cookies:', document.cookie);
+                        const cookieStr = document.cookie;
+                        console.log('Document cookies length:', cookieStr.length);
+                        console.log('Document cookies preview:', cookieStr.substring(0, 100) + '...');
                         
-                        const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail?aid=6383&version_code=190500&aweme_id=${aweme_id}`;
+                        // 使用随机参数避免缓存
+                        const timestamp = new Date().getTime();
+                        const random = Math.floor(Math.random() * 1000000);
+                        const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail?aid=6383&version_code=190500&aweme_id=${aweme_id}&_t=${timestamp}&_r=${random}`;
                         console.log('API URL:', apiUrl);
                         
-                        const response = await fetch(
-                            apiUrl,
-                            {
-                                method: 'GET',
-                                headers: {
-                                    'Referer': 'https://www.douyin.com',
-                                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        // 设置超时控制
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+                        
+                        let response;
+                        try {
+                            response = await fetch(
+                                apiUrl,
+                                {
+                                    method: 'GET',
+                                    headers: {
+                                        'Referer': 'https://www.douyin.com',
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                        'Accept': 'application/json, text/plain, */*',
+                                        'Accept-Language': 'zh-CN,zh;q=0.9',
+                                        'Cache-Control': 'no-cache',
+                                        'Pragma': 'no-cache'
+                                    },
+                                    signal: controller.signal
                                 }
-                            }
-                        );
-                        console.log('API response status:', response.status);
+                            );
+                            
+                            // 清除超时定时器
+                            clearTimeout(timeoutId);
+                            console.log('API response status:', response.status);
+                        } catch (fetchError) {
+                            console.error('Fetch error:', fetchError);
+                            throw new Error(`API 请求失败: ${fetchError.message}`);
+                        }
                         
                         if (!response.ok) {
                             console.error('API response not OK:', response.status, response.statusText);

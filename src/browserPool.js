@@ -100,6 +100,9 @@ class BrowserPool {
         const browser = await puppeteer.launch({
             headless: true,
             defaultViewport: null,
+            // 增加协议超时设置
+            protocolTimeout: 180000, // 3分钟超时
+            timeout: 180000, // 3分钟超时
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -107,11 +110,48 @@ class BrowserPool {
                 '--start-maximized',
                 '--disable-web-security',
                 '--disable-features=IsolateOrigins,site-per-process',
-                '--disable-gpu'
+                '--disable-dev-shm-usage', // 避免内存不足问题
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--enable-unsafe-swiftshader', // 解决WebGL警告
+                '--hide-scrollbars',
+                '--mute-audio',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-breakpad',
+                '--disable-client-side-phishing-detection',
+                '--disable-component-update',
+                '--disable-default-apps',
+                '--disable-domain-reliability',
+                '--disable-extensions',
+                '--disable-features=AudioServiceOutOfProcess',
+                '--disable-hang-monitor',
+                '--disable-ipc-flooding-protection',
+                '--disable-notifications',
+                '--disable-offer-store-unmasked-wallet-cards',
+                '--disable-popup-blocking',
+                '--disable-print-preview',
+                '--disable-prompt-on-repost',
+                '--disable-speech-api',
+                '--disable-sync',
+                '--disable-translate',
+                '--disable-voice-input',
+                '--metrics-recording-only',
+                '--no-default-browser-check',
+                '--no-first-run',
+                '--no-pings',
+                '--no-zygote',
+                '--password-store=basic',
+                '--use-gl=swiftshader',
+                '--use-mock-keychain',
+                '--force-device-scale-factor=1',
+                '--lang=zh-CN,zh'
             ],
             ignoreDefaultArgs: [
                 '--enable-automation',
-                '--disable-blink-features=AccessibilityObjectModel' // 禁用无障碍模式
+                '--disable-blink-features=AccessibilityObjectModel', // 禁用无障碍模式
+                '--disable-blink-features=AutomationControlled'
             ]
         });
         
