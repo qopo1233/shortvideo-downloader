@@ -263,6 +263,36 @@ class DouyinDownloader {
                 await new Promise(resolve => setTimeout(resolve, 5000));
             }
             
+            // 在检查验证码之前先保存截图
+            try {
+                // 创建调试目录
+                const debugDir = path.join(__dirname, '../debug');
+                if (!fs.existsSync(debugDir)) {
+                    fs.mkdirSync(debugDir, { recursive: true });
+                }
+                
+                // 生成时间戳文件名
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const screenshotPath = path.join(debugDir, `before-verification-${timestamp}.png`);
+                const htmlPath = path.join(debugDir, `before-verification-${timestamp}.html`);
+                
+                // 保存截图
+                await page.screenshot({ path: screenshotPath, fullPage: true });
+                console.log(`Before verification screenshot saved to: ${screenshotPath}`);
+                
+                // 保存页面HTML
+                const html = await page.content();
+                fs.writeFileSync(htmlPath, html);
+                console.log(`Before verification HTML saved to: ${htmlPath}`);
+                
+                // 保存当前 URL
+                const currentUrl = await page.url();
+                console.log(`Current URL before verification: ${currentUrl}`);
+                fs.writeFileSync(path.join(debugDir, `before-verification-url-${timestamp}.txt`), currentUrl);
+            } catch (debugError) {
+                console.error('Error saving debug info before verification:', debugError);
+            }
+            
             // 检查并处理验证码
             const needVerification = await this.waitForVerification(page);
             if (needVerification) {
