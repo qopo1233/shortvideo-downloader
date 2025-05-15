@@ -118,10 +118,20 @@ class DouyinDownloader {
             const pageContent = await page.evaluate(() => document.body.innerText);
             console.log('Page content:', pageContent);
             
-            console.log
+            // 获取当前页面的url
+            const currentUrl = await page.url();
+            console.log('Current page URL:', currentUrl);
+
             // 等待视频容器加载
-            await page.waitForSelector('.xg-video-container', { timeout: 5000 });
-            console.log('Video container loaded');
+            try {
+                await page.waitForSelector('.xg-video-container', { timeout: 10000 });
+                console.log('Video container loaded');
+            }catch(error) {
+                console.error('Failed to load video container:', error);
+                console.log('Attempting to proceed without video container...');
+            }
+
+            
 
             // 获取视频ID
             const videoId = await page.evaluate(() => {
