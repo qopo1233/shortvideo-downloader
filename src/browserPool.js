@@ -103,12 +103,15 @@ class BrowserPool {
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-                '--window-size=1280,800',
+                '--window-size=1280,900',
                 '--start-maximized',
                 '--disable-web-security',
                 '--disable-features=IsolateOrigins,site-per-process'
             ],
-            ignoreDefaultArgs: ['--enable-automation']
+            ignoreDefaultArgs: [
+                '--enable-automation',
+                '--disable-blink-features=AccessibilityObjectModel' // 禁用无障碍模式
+            ]
         });
         
         // 创建新页面
